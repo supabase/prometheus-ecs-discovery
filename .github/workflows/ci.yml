@@ -5,6 +5,7 @@ on:
   push:
     branches:
       - master
+      - pcnc/ipv6-support
 
 concurrency:
   group: ${{ github.workflow }}-${{ github.event.pull_request.number || github.ref }}

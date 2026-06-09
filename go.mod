@@ -1,4 +1,4 @@
-module github.com/teralytics/prometheus-ecs-discovery
+module github.com/supabase/prometheus-ecs-discovery
 
 go 1.26
 
