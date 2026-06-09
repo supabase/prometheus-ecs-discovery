@@ -1,0 +1,35 @@
+version: "2"
+
+linters:
+  # Default set (errcheck, govet, ineffassign, staticcheck, unused) plus a few
+  # high-signal additions.
+  enable:
+    - misspell
+    - bodyclose
+    - errorlint
+    - asasalint
+    - copyloopvar
+    - durationcheck
+    - dupl
+    - errname
+    - exhaustive
+    - gocheckcompilerdirectives
+  settings:
+    errcheck:
+      # Close on files/response bodies is conventionally fire-and-forget.
+      exclude-functions:
+        - (*os.File).Close
+        - (io.Closer).Close
+        - (io.ReadCloser).Close
+  exclusions:
+    rules:
+      # Test setup writes (WriteFile/Write/Symlink) intentionally ignore errors.
+      - path: _test\.go
+        linters:
+          - errcheck
+          - dupl
+
+formatters:
+  enable:
+    - gofumpt
+    - goimports

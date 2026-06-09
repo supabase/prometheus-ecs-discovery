@@ -1,0 +1,89 @@
+# yaml-language-server: $schema=https://goreleaser.com/static/schema.json
+
+version: 2
+
+project_name: prometheus-ecs-discovery
+
+before:
+  hooks:
+    - go mod tidy
+
+builds:
+  - main: .
+    binary: prometheus-ecs-discovery
+    env:
+      - CGO_ENABLED=0
+    goos:
+      - linux
+    goarch:
+      - arm64
+      - amd64
+    ldflags:
+      - -s -w
+      - -X main.version={{ .Version }}
+
+archives:
+  - id: binary
+    formats: [binary]
+    name_template: >-
+      {{ .ProjectName }}_
+      {{- .Version }}_
+      {{- .Arch }}
+      {{- if .Arm }}v{{ .Arm }}{{ end }}
+  - id: tarxz
+    formats: [tar.xz]
+    name_template: >-
+      {{ .ProjectName }}_
+      {{- .Version }}_
+      {{- .Arch }}
+      {{- if .Arm }}v{{ .Arm }}{{ end }}
+
+dockers:
+  - image_templates:
+      - "ghcr.io/supabase/prometheus-ecs-discovery:{{ .Version }}-amd64"
+    use: buildx
+    dockerfile: Dockerfile.goreleaser
+    goarch: amd64
+    build_flag_templates:
+      - "--platform=linux/amd64"
+      - "--label=org.opencontainers.image.title={{ .ProjectName }}"
+      - "--label=org.opencontainers.image.version={{ .Version }}"
+      - "--label=org.opencontainers.image.revision={{ .FullCommit }}"
+      - "--label=org.opencontainers.image.created={{ .Date }}"
+      - "--label=org.opencontainers.image.source={{ .GitURL }}"
+  - image_templates:
+      - "ghcr.io/supabase/prometheus-ecs-discovery:{{ .Version }}-arm64"
+    use: buildx
+    dockerfile: Dockerfile.goreleaser
+    goarch: arm64
+    build_flag_templates:
+      - "--platform=linux/arm64"
+      - "--label=org.opencontainers.image.title={{ .ProjectName }}"
+      - "--label=org.opencontainers.image.version={{ .Version }}"
+      - "--label=org.opencontainers.image.revision={{ .FullCommit }}"
+      - "--label=org.opencontainers.image.created={{ .Date }}"
+      - "--label=org.opencontainers.image.source={{ .GitURL }}"
+
+docker_manifests:
+  - name_template: "ghcr.io/supabase/prometheus-ecs-discovery:{{ .Version }}"
+    image_templates:
+      - "ghcr.io/supabase/prometheus-ecs-discovery:{{ .Version }}-amd64"
+      - "ghcr.io/supabase/prometheus-ecs-discovery:{{ .Version }}-arm64"
+  - name_template: "ghcr.io/supabase/prometheus-ecs-discovery:latest"
+    image_templates:
+      - "ghcr.io/supabase/prometheus-ecs-discovery:{{ .Version }}-amd64"
+      - "ghcr.io/supabase/prometheus-ecs-discovery:{{ .Version }}-arm64"
+
+changelog:
+  use: github-native
+
+release:
+  ids: [binary]
+  draft: false
+  prerelease: auto
+  mode: replace
+  footer: >-
+
+    ---
+
+    Released by [GoReleaser](https://github.com/goreleaser/goreleaser).
