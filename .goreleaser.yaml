@@ -1,0 +1,53 @@
+# yaml-language-server: $schema=https://goreleaser.com/static/schema.json
+
+version: 2
+
+project_name: prometheus-ecs-discovery
+
+before:
+  hooks:
+    - go mod tidy
+
+builds:
+  - main: .
+    binary: prometheus-ecs-discovery
+    env:
+      - CGO_ENABLED=0
+    goos:
+      - linux
+    goarch:
+      - arm64
+      - amd64
+    ldflags:
+      - -s -w
+      - -X main.version={{ .Version }}
+
+archives:
+  - id: binary
+    formats: [binary]
+    name_template: >-
+      {{ .ProjectName }}_
+      {{- .Version }}_
+      {{- .Arch }}
+      {{- if .Arm }}v{{ .Arm }}{{ end }}
+  - id: tarxz
+    formats: [tar.xz]
+    name_template: >-
+      {{ .ProjectName }}_
+      {{- .Version }}_
+      {{- .Arch }}
+      {{- if .Arm }}v{{ .Arm }}{{ end }}
+
+changelog:
+  use: github-native
+
+release:
+  ids: [binary]
+  draft: false
+  prerelease: auto
+  mode: replace
+  footer: >-
+
+    ---
+
+    Released by [GoReleaser](https://github.com/goreleaser/goreleaser).

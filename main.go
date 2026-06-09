@@ -19,8 +19,9 @@ import (
 	"errors"
 	"flag"
 	"fmt"
-	"io/ioutil"
 	"log"
+	"net"
+	"os"
 	"strconv"
 	"strings"
 	"time"
@@ -53,30 +54,45 @@ type labels struct {
 // Docker label for enabling dynamic port detection
 const dynamicPortLabel = "PROMETHEUS_DYNAMIC_EXPORT"
 
-var cluster = flag.String("config.cluster", "", "name of the cluster to scrape")
-var outFile = flag.String("config.write-to", "ecs_file_sd.yml", "path of file to write ECS service discovery information to")
-var interval = flag.Duration("config.scrape-interval", 60*time.Second, "interval at which to scrape the AWS API for ECS service discovery information")
-var times = flag.Int("config.scrape-times", 0, "how many times to scrape before exiting (0 = infinite)")
-var roleArn = flag.String("config.role-arn", "", "ARN of the role to assume when scraping the AWS API (optional)")
-var prometheusPortLabel = flag.String("config.port-label", "PROMETHEUS_EXPORTER_PORT", "Docker label to define the scrape port of the application (if missing an application won't be scraped)")
-var prometheusPathLabel = flag.String("config.path-label", "PROMETHEUS_EXPORTER_PATH", "Docker label to define the scrape path of the application")
-var prometheusSchemeLabel= flag.String("config.scheme-label", "PROMETHEUS_EXPORTER_SCHEME", "Docker label to define the scheme of the target application")
-var prometheusFilterLabel = flag.String("config.filter-label", "", "Docker label (and optionally value) to require to scrape the application")
-var prometheusServerNameLabel = flag.String("config.server-name-label", "PROMETHEUS_EXPORTER_SERVER_NAME", "Docker label to define the server name")
-var prometheusJobNameLabel = flag.String("config.job-name-label", "PROMETHEUS_EXPORTER_JOB_NAME", "Docker label to define the job name")
-var prometheusDynamicPortDetection = flag.Bool("config.dynamic-port-detection", false, fmt.Sprintf("If true, only tasks with the Docker label %s=1 will be scraped", dynamicPortLabel))
+var version = "dev"
+
+var (
+	cluster                        = flag.String("config.cluster", "", "name of the cluster to scrape")
+	outFile                        = flag.String("config.write-to", "ecs_file_sd.yml", "path of file to write ECS service discovery information to")
+	interval                       = flag.Duration("config.scrape-interval", 60*time.Second, "interval at which to scrape the AWS API for ECS service discovery information")
+	times                          = flag.Int("config.scrape-times", 0, "how many times to scrape before exiting (0 = infinite)")
+	roleArn                        = flag.String("config.role-arn", "", "ARN of the role to assume when scraping the AWS API (optional)")
+	prometheusPortLabel            = flag.String("config.port-label", "PROMETHEUS_EXPORTER_PORT", "Docker label to define the scrape port of the application (if missing an application won't be scraped)")
+	prometheusPathLabel            = flag.String("config.path-label", "PROMETHEUS_EXPORTER_PATH", "Docker label to define the scrape path of the application")
+	prometheusSchemeLabel          = flag.String("config.scheme-label", "PROMETHEUS_EXPORTER_SCHEME", "Docker label to define the scheme of the target application")
+	prometheusFilterLabel          = flag.String("config.filter-label", "", "Docker label (and optionally value) to require to scrape the application")
+	prometheusServerNameLabel      = flag.String("config.server-name-label", "PROMETHEUS_EXPORTER_SERVER_NAME", "Docker label to define the server name")
+	prometheusJobNameLabel         = flag.String("config.job-name-label", "PROMETHEUS_EXPORTER_JOB_NAME", "Docker label to define the job name")
+	prometheusPreferIPv6Label      = flag.String("config.prefer-ipv6-label", "PROMETHEUS_EXPORTER_PREFER_IPV6", "Docker label that, when set to \"true\", prefers the container's IPv6 address over IPv4")
+	prometheusDynamicPortDetection = flag.Bool("config.dynamic-port-detection", false, fmt.Sprintf("If true, only tasks with the Docker label %s=1 will be scraped", dynamicPortLabel))
+	showVersion                    = flag.Bool("version", false, "print version and exit")
+)
 
 // logError is a convenience function that decodes all possible ECS
 // errors and displays them to standard error.
 func logError(err error) {
 	if err != nil {
-		var oe *smithy.OperationError
-		if errors.As(err, &oe) {
+		if oe, ok := errors.AsType[*smithy.OperationError](err); ok {
 			log.Printf("failed to call service: %s, operation: %s, error: %v", oe.Service(), oe.Operation(), oe.Unwrap())
 		} else {
 			log.Println(err.Error())
 		}
 	}
+}
+
+func decideAddressFamily(preferV6 bool, ipv4, ipv6 string) string {
+	if preferV6 && ipv6 != "" {
+		return ipv6
+	}
+	if ipv4 != "" {
+		return ipv4
+	}
+	return ipv6
 }
 
 // GetClusters retrieves a list of *ClusterArns from Amazon ECS,
@@ -131,29 +147,30 @@ type PrometheusTaskInfo struct {
 // container in the task has a PROMETHEUS_EXPORTER_PORT
 //
 // Example:
-//     ...
-//             "Name": "apache",
-//             "DockerLabels": {
-//                  "PROMETHEUS_EXPORTER_PORT": "1234"
-//              },
-//     ...
-//              "PortMappings": [
-//                {
-//                  "ContainerPort": 1883,
-//                  "HostPort": 0,
-//                  "Protocol": "tcp"
-//                },
-//                {
-//                  "ContainerPort": 1234,
-//                  "HostPort": 0,
-//                  "Protocol": "tcp"
-//                }
-//              ],
-//     ...
+//
+//	...
+//	        "Name": "apache",
+//	        "DockerLabels": {
+//	             "PROMETHEUS_EXPORTER_PORT": "1234"
+//	         },
+//	...
+//	         "PortMappings": [
+//	           {
+//	             "ContainerPort": 1883,
+//	             "HostPort": 0,
+//	             "Protocol": "tcp"
+//	           },
+//	           {
+//	             "ContainerPort": 1234,
+//	             "HostPort": 0,
+//	             "Protocol": "tcp"
+//	           }
+//	         ],
+//	...
 func (t *AugmentedTask) ExporterInformation() []*PrometheusTaskInfo {
 	ret := []*PrometheusTaskInfo{}
 	var host string
-	var ip string
+	var ipv4, ipv6 string
 
 	if t.LaunchType != ecstypes.LaunchTypeFargate {
 		if t.EC2Instance == nil {
@@ -164,14 +181,25 @@ func (t *AugmentedTask) ExporterInformation() []*PrometheusTaskInfo {
 		}
 
 		for _, iface := range t.EC2Instance.NetworkInterfaces {
-			if iface.PrivateIpAddress != nil && *iface.PrivateIpAddress != "" &&
-				iface.PrivateDnsName != nil && *iface.PrivateDnsName != "" &&
-				*iface.PrivateDnsName == *t.EC2Instance.PrivateDnsName {
-				ip = *iface.PrivateIpAddress
+			if iface.PrivateDnsName == nil || *iface.PrivateDnsName == "" ||
+				t.EC2Instance.PrivateDnsName == nil ||
+				*iface.PrivateDnsName != *t.EC2Instance.PrivateDnsName {
+				continue
+			}
+			if iface.PrivateIpAddress != nil && *iface.PrivateIpAddress != "" {
+				ipv4 = *iface.PrivateIpAddress
+			}
+			for _, v6 := range iface.Ipv6Addresses {
+				if v6.Ipv6Address != nil && *v6.Ipv6Address != "" {
+					ipv6 = *v6.Ipv6Address
+					break
+				}
+			}
+			if ipv4 != "" || ipv6 != "" {
 				break
 			}
 		}
-		if ip == "" {
+		if ipv4 == "" && ipv6 == "" {
 			return ret
 		}
 
@@ -251,8 +279,11 @@ func (t *AugmentedTask) ExporterInformation() []*PrometheusTaskInfo {
 				}
 			} else {
 				for _, ni := range i.NetworkInterfaces {
-					if *ni.PrivateIpv4Address != "" {
-						ip = *ni.PrivateIpv4Address
+					if ipv4 == "" && ni.PrivateIpv4Address != nil && *ni.PrivateIpv4Address != "" {
+						ipv4 = *ni.PrivateIpv4Address
+					}
+					if ipv6 == "" && ni.Ipv6Address != nil && *ni.Ipv6Address != "" {
+						ipv6 = *ni.Ipv6Address
 					}
 				}
 				hostPort = int32(exporterPort)
@@ -274,8 +305,8 @@ func (t *AugmentedTask) ExporterInformation() []*PrometheusTaskInfo {
 		if ok {
 			host = strings.TrimRight(exporterServerName, "/")
 		} else {
-			// No server name, so fall back to ip address
-			host = ip
+			preferV6 := d.DockerLabels[*prometheusPreferIPv6Label] == "true"
+			host = decideAddressFamily(preferV6, ipv4, ipv6)
 		}
 
 		labels := labels{
@@ -297,11 +328,11 @@ func (t *AugmentedTask) ExporterInformation() []*PrometheusTaskInfo {
 
 		scheme, ok = d.DockerLabels[*prometheusSchemeLabel]
 		if ok {
-		    labels.Scheme = scheme
+			labels.Scheme = scheme
 		}
 
 		ret = append(ret, &PrometheusTaskInfo{
-			Targets: []string{fmt.Sprintf("%s:%d", host, hostPort)},
+			Targets: []string{net.JoinHostPort(host, strconv.Itoa(int(hostPort)))},
 			Labels:  labels,
 		})
 	}
@@ -371,16 +402,13 @@ func StringToStarString(s []string) []*string {
 	return c
 }
 
-// SplitArray splits given array into chunks, it's usefull
+// SplitArray splits given array into chunks, it's useful
 // because AWS API has limits on number of elements you can
 // submit via one call.
 func SplitArray(a []string, size int) [][]string {
 	var splitted [][]string
 	for i := 0; i < len(a); i += size {
-		end := i + size
-		if end > len(a) {
-			end = len(a)
-		}
+		end := min(i+size, len(a))
 		splitted = append(splitted, a[i:end])
 	}
 	return splitted
@@ -414,9 +442,7 @@ func DescribeInstancesUnpaginated(svc *ec2.Client, instanceIds []string) ([]ec2t
 	}
 	result := []ec2types.Instance{}
 	for _, rsv := range finalOutput.Reservations {
-		for _, i := range rsv.Instances {
-			result = append(result, i)
-		}
+		result = append(result, rsv.Instances...)
 	}
 	return result, nil
 }
@@ -424,7 +450,6 @@ func DescribeInstancesUnpaginated(svc *ec2.Client, instanceIds []string) ([]ec2t
 // AddContainerInstancesToTasks adds to each Task the EC2 instance
 // running its containers.
 func AddContainerInstancesToTasks(svc *ecs.Client, svcec2 *ec2.Client, taskList []*AugmentedTask) ([]*AugmentedTask, error) {
-
 	clusterArnToContainerInstancesArns := make(map[string]map[string]*ecstypes.ContainerInstance)
 	for _, task := range taskList {
 		if task.ContainerInstanceArn != nil {
@@ -568,9 +593,7 @@ func GetTasksOfClusters(svc *ecs.Client, clusterArns []*string) ([]ecstypes.Task
 		if result.err != nil {
 			return nil, result.err
 		}
-		for _, task := range result.out.Tasks {
-			tasks = append(tasks, task)
-		}
+		tasks = append(tasks, result.out.Tasks...)
 	}
 
 	return tasks, nil
@@ -585,7 +608,7 @@ func GetAugmentedTasks(svc *ecs.Client, svcec2 *ec2.Client, clusterArns []*strin
 	}
 
 	tasks := []*AugmentedTask{}
-	for i := 0; i < len(simpleTasks); i++ {
+	for i := range len(simpleTasks) {
 		tasks = append(tasks, &AugmentedTask{&simpleTasks[i], nil, nil})
 	}
 	tasks, err = AddTaskDefinitionsOfTasks(svc, tasks)
@@ -603,6 +626,11 @@ func GetAugmentedTasks(svc *ecs.Client, svcec2 *ec2.Client, clusterArns []*strin
 
 func main() {
 	flag.Parse()
+
+	if *showVersion {
+		fmt.Println(version)
+		return
+	}
 
 	config, err := config.LoadDefaultConfig(context.Background())
 	if err != nil {
@@ -666,7 +694,7 @@ func main() {
 			return
 		}
 		log.Printf("Writing %d discovered exporters to %s", len(infos), *outFile)
-		err = ioutil.WriteFile(*outFile, m, 0644)
+		err = os.WriteFile(*outFile, m, 0o644)
 		if err != nil {
 			logError(err)
 			return
