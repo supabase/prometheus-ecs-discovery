@@ -85,7 +85,7 @@ func logError(err error) {
 	}
 }
 
-func pickAddressFamily(preferV6 bool, ipv4, ipv6 string) string {
+func decideAddressFamily(preferV6 bool, ipv4, ipv6 string) string {
 	if preferV6 && ipv6 != "" {
 		return ipv6
 	}
@@ -306,7 +306,7 @@ func (t *AugmentedTask) ExporterInformation() []*PrometheusTaskInfo {
 			host = strings.TrimRight(exporterServerName, "/")
 		} else {
 			preferV6 := d.DockerLabels[*prometheusPreferIPv6Label] == "true"
-			host = pickAddressFamily(preferV6, ipv4, ipv6)
+			host = decideAddressFamily(preferV6, ipv4, ipv6)
 		}
 
 		labels := labels{
