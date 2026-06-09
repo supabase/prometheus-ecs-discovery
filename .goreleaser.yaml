@@ -38,22 +38,6 @@ archives:
       {{- .Arch }}
       {{- if .Arm }}v{{ .Arm }}{{ end }}
 
-dockers_v2:
-  - images:
-      - "ghcr.io/supabase/prometheus-ecs-discovery"
-    tags:
-      - "{{ .Version }}"
-      - "latest"
-    platforms:
-      - linux/amd64
-      - linux/arm64
-    dockerfile: Dockerfile.goreleaser
-    labels:
-      org.opencontainers.image.title: "{{ .ProjectName }}"
-      org.opencontainers.image.version: "{{ .Version }}"
-      org.opencontainers.image.revision: "{{ .FullCommit }}"
-      org.opencontainers.image.source: "{{ .GitURL }}"
-
 changelog:
   use: github-native
 

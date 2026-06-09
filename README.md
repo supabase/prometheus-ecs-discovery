@@ -35,13 +35,7 @@ The command line parameters that can be used are:
 
 ## Usage
 
-First, get the program. Either pull the published container image:
-
-```
-docker pull ghcr.io/supabase/prometheus-ecs-discovery:latest
-```
-
-or build it from source:
+First, build this program from source:
 
 ```
 go build .
