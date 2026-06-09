@@ -4,6 +4,7 @@ on:
   push:
     branches:
       - master
+      - pcnc/ipv6-support
   workflow_dispatch:
 
 permissions:
