@@ -1,4 +1,5 @@
 FROM alpine:latest
+ARG TARGETPLATFORM
 RUN apk --no-cache add ca-certificates
-COPY prometheus-ecs-discovery /bin/
+COPY $TARGETPLATFORM/prometheus-ecs-discovery /bin/
 ENTRYPOINT ["prometheus-ecs-discovery"]
